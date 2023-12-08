@@ -35,7 +35,7 @@ public class JavaNativeCodeSandBox implements CodeSandBox {
     public static void main(String[] args) {
         JavaNativeCodeSandBox javaNativeCodeSandBox = new JavaNativeCodeSandBox();
 //        String code = ResourceUtil.readStr("testCode/simpleComputeArgs/Main.java", StandardCharsets.UTF_8);
-        String code = ResourceUtil.readStr("testCode/unsafe/SleepError.java", StandardCharsets.UTF_8);
+        String code = ResourceUtil.readStr("testCode/unsafe/MemoryError.java", StandardCharsets.UTF_8);
         ExecuteCodeRequest executeCodeRequest = ExecuteCodeRequest.builder()
                 .code(code)
                 .language("java")
@@ -89,7 +89,7 @@ public class JavaNativeCodeSandBox implements CodeSandBox {
         List<ExecuteInfo> runInfoList = new ArrayList<>();
         List<String> inputList = executeCodeRequest.getInputList();
         for (String input : inputList) {
-            String runCmd = String.format("java -Dfile.encoding=utf-8 -cp %s Main %s", userCodeDir, input);
+            String runCmd = String.format("java -Xmx256m -Dfile.encoding=utf-8 -cp %s Main %s", userCodeDir, input);
             ExecuteInfo runInfo;
             try {
                 Process runProcess = Runtime.getRuntime().exec(runCmd);
@@ -116,8 +116,16 @@ public class JavaNativeCodeSandBox implements CodeSandBox {
             }
             System.out.println(runInfo);
             runInfoList.add(runInfo);
-            // 超时则不继续对后续输入执行代码
+            // 超时则终止循环
             if (runInfo.getTime() > TIME_LIMIT) {
+                break;
+            }
+            // 运行错误则终止循环
+            String runErrorMessage = runInfo.getErrorMessage();
+            if (StrUtil.isNotBlank(runErrorMessage)) {
+                executeCodeResponse.setMessage(runErrorMessage);
+                // 运行错误
+                executeCodeResponse.setStatus(ExecuteCodeStatusEnum.RUNTIME_ERROR.getValue());
                 break;
             }
         }
@@ -126,13 +134,6 @@ public class JavaNativeCodeSandBox implements CodeSandBox {
         List<String> outputList = new ArrayList<>();
         long maxTime = 0L;
         for (ExecuteInfo runInfo : runInfoList) {
-            String runErrorMessage = runInfo.getErrorMessage();
-            if (StrUtil.isNotBlank(runErrorMessage)) {
-                executeCodeResponse.setMessage(runErrorMessage);
-                // 运行错误
-                executeCodeResponse.setStatus(ExecuteCodeStatusEnum.RUNTIME_ERROR.getValue());
-                break;
-            }
             outputList.add(runInfo.getMessage());
             Long time = runInfo.getTime();
             maxTime = Math.max(maxTime, time);

@@ -15,10 +15,7 @@ public enum ExecuteCodeStatusEnum {
     SUCCEED("Succeed", 0),
     COMPILE_ERROR("Compile Error", 1),
     RUNTIME_ERROR("Runtime Error", 2),
-    SYSTEM_ERROR("System Error", 3),
-    MEMORY_LIMIT_EXCEEDED("Memory Limit Exceeded", 4),
-    TIME_LIMIT_EXCEEDED("Time Limit Exceeded", 5);
-
+    SYSTEM_ERROR("System Error", 3);
 
     private final String text;
 
