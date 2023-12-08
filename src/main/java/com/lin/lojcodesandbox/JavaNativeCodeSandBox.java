@@ -30,9 +30,12 @@ public class JavaNativeCodeSandBox implements CodeSandBox {
 
     private final String USER_CODE_NAME = "Main.java";
 
+    private final Long TIME_LIMIT = 5000L;
+
     public static void main(String[] args) {
         JavaNativeCodeSandBox javaNativeCodeSandBox = new JavaNativeCodeSandBox();
-        String code = ResourceUtil.readStr("testCode/simpleComputeArgs/Main.java", StandardCharsets.UTF_8);
+//        String code = ResourceUtil.readStr("testCode/simpleComputeArgs/Main.java", StandardCharsets.UTF_8);
+        String code = ResourceUtil.readStr("testCode/unsafe/SleepError.java", StandardCharsets.UTF_8);
         ExecuteCodeRequest executeCodeRequest = ExecuteCodeRequest.builder()
                 .code(code)
                 .language("java")
@@ -47,6 +50,7 @@ public class JavaNativeCodeSandBox implements CodeSandBox {
     @Override
     public ExecuteCodeResponse executeCode(ExecuteCodeRequest executeCodeRequest) {
         ExecuteCodeResponse executeCodeResponse = new ExecuteCodeResponse();
+        executeCodeResponse.setStatus(ExecuteCodeStatusEnum.SUCCEED.getValue());
 
         // 1.将用户传入代码保存为 java 文件
         // 检查代码存储目录是否存在
@@ -65,9 +69,10 @@ public class JavaNativeCodeSandBox implements CodeSandBox {
         String compileCmd = String.format("javac -encoding utf-8 %s", userCodePath);
         ExecuteInfo compileInfo;
         try {
-            compileInfo = ProcessUtils.runAndGetInfo(compileCmd, "编译");
+            Process compileProcess = Runtime.getRuntime().exec(compileCmd);
+            compileInfo = ProcessUtils.runProcessAndGetInfo(compileProcess, "编译");
         } catch (Exception e) {
-            // 系统错误
+            // 系统错误 直接返回
             executeCodeResponse.setStatus(ExecuteCodeStatusEnum.SYSTEM_ERROR.getValue());
             return executeCodeResponse;
         }
@@ -75,7 +80,7 @@ public class JavaNativeCodeSandBox implements CodeSandBox {
         String compileErrorMessage = compileInfo.getErrorMessage();
         if (StrUtil.isNotBlank(compileErrorMessage)) {
             executeCodeResponse.setMessage(compileErrorMessage);
-            // 编译错误
+            // 编译错误 直接返回
             executeCodeResponse.setStatus(ExecuteCodeStatusEnum.COMPILE_ERROR.getValue());
             return executeCodeResponse;
         }
@@ -87,14 +92,34 @@ public class JavaNativeCodeSandBox implements CodeSandBox {
             String runCmd = String.format("java -Dfile.encoding=utf-8 -cp %s Main %s", userCodeDir, input);
             ExecuteInfo runInfo;
             try {
-                runInfo = ProcessUtils.runAndGetInfo(runCmd, "运行");
+                Process runProcess = Runtime.getRuntime().exec(runCmd);
+                // 超时控制
+                new Thread(() -> {
+                    try {
+                        Thread.sleep(TIME_LIMIT);
+                        // 如果执行进程还没结束则中断
+                        try{
+                            runProcess.exitValue();
+                        }catch (Exception e){
+                            System.out.println("超时了，中断");
+                            runProcess.destroy();
+                        }
+                    } catch (InterruptedException e) {
+                        throw new RuntimeException(e);
+                    }
+                }).start();
+                runInfo = ProcessUtils.runProcessAndGetInfo(runProcess, "运行");
             } catch (Exception e) {
-                // 系统错误
+                // 系统错误 直接返回
                 executeCodeResponse.setStatus(ExecuteCodeStatusEnum.SYSTEM_ERROR.getValue());
                 return executeCodeResponse;
             }
             System.out.println(runInfo);
             runInfoList.add(runInfo);
+            // 超时则不继续对后续输入执行代码
+            if (runInfo.getTime() > TIME_LIMIT) {
+                break;
+            }
         }
 
         // 4.得到结果并整理
@@ -119,7 +144,6 @@ public class JavaNativeCodeSandBox implements CodeSandBox {
         // todo
         // judgeInfo.setMemory();
         executeCodeResponse.setJudgeInfo(judgeInfo);
-        executeCodeResponse.setStatus(ExecuteCodeStatusEnum.SUCCEED.getValue());
 
         // 5.清理文件
         if (FileUtil.exist(userCodeDir)) {

@@ -16,10 +16,9 @@ import java.util.List;
  */
 public class ProcessUtils {
 
-    public static ExecuteInfo runAndGetInfo(String cmd, String opName) throws Exception {
+    public static ExecuteInfo runProcessAndGetInfo(Process process, String opName) throws Exception {
         ExecuteInfo executeInfo = new ExecuteInfo();
         StopWatch stopWatch = new StopWatch();
-        Process process = Runtime.getRuntime().exec(cmd);
         stopWatch.start();
         int exitValue = process.waitFor();
         // 获取编译过程输出到控制台的消息
