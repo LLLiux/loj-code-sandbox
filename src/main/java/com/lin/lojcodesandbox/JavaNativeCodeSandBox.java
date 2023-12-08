@@ -3,18 +3,16 @@ package com.lin.lojcodesandbox;
 import cn.hutool.core.io.FileUtil;
 import cn.hutool.core.io.resource.ResourceUtil;
 import cn.hutool.core.util.StrUtil;
+import cn.hutool.dfa.FoundWord;
+import cn.hutool.dfa.WordTree;
 import com.lin.lojcodesandbox.enums.ExecuteCodeStatusEnum;
 import com.lin.lojcodesandbox.model.ExecuteCodeRequest;
 import com.lin.lojcodesandbox.model.ExecuteCodeResponse;
 import com.lin.lojcodesandbox.model.ExecuteInfo;
 import com.lin.lojcodesandbox.model.JudgeInfo;
 import com.lin.lojcodesandbox.utils.ProcessUtils;
-import org.apache.commons.lang3.StringUtils;
 
-import java.io.BufferedReader;
 import java.io.File;
-import java.io.IOException;
-import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -32,10 +30,18 @@ public class JavaNativeCodeSandBox implements CodeSandBox {
 
     private final Long TIME_LIMIT = 5000L;
 
+    private static final List<String> blackList = Arrays.asList("Files", "exec");
+
+    private static final WordTree BLACK_LIST_WORD_TREE = new WordTree();
+
+    static {
+        BLACK_LIST_WORD_TREE.addWords(blackList);
+    }
+
     public static void main(String[] args) {
         JavaNativeCodeSandBox javaNativeCodeSandBox = new JavaNativeCodeSandBox();
 //        String code = ResourceUtil.readStr("testCode/simpleComputeArgs/Main.java", StandardCharsets.UTF_8);
-        String code = ResourceUtil.readStr("testCode/unsafe/MemoryError.java", StandardCharsets.UTF_8);
+        String code = ResourceUtil.readStr("testCode/unsafe/ReadFile.java", StandardCharsets.UTF_8);
         ExecuteCodeRequest executeCodeRequest = ExecuteCodeRequest.builder()
                 .code(code)
                 .language("java")
@@ -51,6 +57,13 @@ public class JavaNativeCodeSandBox implements CodeSandBox {
     public ExecuteCodeResponse executeCode(ExecuteCodeRequest executeCodeRequest) {
         ExecuteCodeResponse executeCodeResponse = new ExecuteCodeResponse();
         executeCodeResponse.setStatus(ExecuteCodeStatusEnum.SUCCEED.getValue());
+        String code = executeCodeRequest.getCode();
+        // 通过黑名单限制操作
+        FoundWord foundWord = BLACK_LIST_WORD_TREE.matchWord(code);
+        if (foundWord != null) {
+            System.out.println("包含禁止词:" + foundWord);
+            return null;
+        }
 
         // 1.将用户传入代码保存为 java 文件
         // 检查代码存储目录是否存在
@@ -62,7 +75,6 @@ public class JavaNativeCodeSandBox implements CodeSandBox {
         // 对于每次代码提交 生成独立目录（存 .java 和 .class）
         String userCodeDir = codeDir + File.separator + UUID.randomUUID();
         String userCodePath = userCodeDir + File.separator + USER_CODE_NAME;
-        String code = executeCodeRequest.getCode();
         File userCodeFile = FileUtil.writeString(code, userCodePath, StandardCharsets.UTF_8);
 
         // 2.编译
@@ -98,9 +110,9 @@ public class JavaNativeCodeSandBox implements CodeSandBox {
                     try {
                         Thread.sleep(TIME_LIMIT);
                         // 如果执行进程还没结束则中断
-                        try{
+                        try {
                             runProcess.exitValue();
-                        }catch (Exception e){
+                        } catch (Exception e) {
                             System.out.println("超时了，中断");
                             runProcess.destroy();
                         }
