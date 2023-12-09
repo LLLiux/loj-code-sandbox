@@ -13,8 +13,14 @@ import java.util.stream.Collectors;
  */
 public enum ExecuteCodeStatusEnum {
     SUCCEED("Succeed", 0),
+
+    // 编译错误 直接退出
     COMPILE_ERROR("Compile Error", 1),
+
+    // 运行时错误（超时 或 超出内存） 继续进行
     RUNTIME_ERROR("Runtime Error", 2),
+
+    // 系统错误（代码沙箱错误） 直接退出
     SYSTEM_ERROR("System Error", 3);
 
     private final String text;
