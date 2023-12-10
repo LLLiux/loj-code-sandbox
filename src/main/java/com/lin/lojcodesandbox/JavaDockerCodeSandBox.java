@@ -51,7 +51,7 @@ public class JavaDockerCodeSandBox implements CodeSandBox {
         ExecuteCodeRequest executeCodeRequest = ExecuteCodeRequest.builder()
                 .code(code)
                 .language("java")
-                .inputList(Arrays.asList("1 2", "1 3"))
+                .inputList(Arrays.asList("1 2", "1 3", "2 4", "1 7"))
                 .build();
         executeCodeRequest.setCode(code);
         executeCodeRequest.setLanguage("java");
@@ -121,22 +121,26 @@ public class JavaDockerCodeSandBox implements CodeSandBox {
         // 创建容器
         HostConfig hostConfig = new HostConfig()
                 .withBinds(new Bind(userCodeDir, new Volume("/app")))
-                .withMemory(MEMORY_LIMIT);
+                .withMemory(MEMORY_LIMIT)
+                .withMemorySwap(0L);
         CreateContainerResponse createContainerResponse = dockerClient.createContainerCmd(openjdkImage)
                 .withHostConfig(hostConfig)
                 .withAttachStderr(true)
                 .withAttachStdin(true)
                 .withAttachStdout(true)
                 .withTty(true)
+                .withNetworkDisabled(true)
+                .withReadonlyRootfs(true)
                 .exec();
         System.out.println(createContainerResponse);
 
         // 4.容器内执行
+        // 启动容器
         String containerId = createContainerResponse.getId();
-        long maxTime = 0L;
-        final long[] maxMemory = {0};
+        dockerClient.startContainerCmd(containerId).exec();
+        // 执行
+        List<ExecuteInfo> runInfoList = new ArrayList<>();
         List<String> inputList = executeCodeRequest.getInputList();
-        List<String> outputList = new ArrayList<>();
         for (String input : inputList) {
             String[] inputArray = input.split(" ");
             // 创建执行命令（此时还未执行）
@@ -150,29 +154,30 @@ public class JavaDockerCodeSandBox implements CodeSandBox {
                     .exec();
             System.out.println("创建执行命令:" + execCreateCmdResponse);
             // 处理不同类型输出（错误输出表示执行出错 正常输出就是正常返回值）
+            final String[] message = new String[1];
+            final String[] errorMessage = new String[1];
             ExecStartResultCallback execStartResultCallback = new ExecStartResultCallback() {
                 @Override
                 public void onNext(Frame frame) {
                     StreamType streamType = frame.getStreamType();
                     if (StreamType.STDERR.equals(streamType)) {
                         // 错误输出
-                        String errorMessage = new String(frame.getPayload());
-                        executeCodeResponse.setMessage(errorMessage);
-                        executeCodeResponse.setStatus(ExecuteCodeStatusEnum.RUNTIME_ERROR.getValue());
+                        errorMessage[0] = new String(frame.getPayload());
                     } else {
                         // 正常输出
-                        String message = new String(frame.getPayload());
-                        outputList.add(message);
+                        message[0] = new String(frame.getPayload());
                     }
                     super.onNext(frame);
                 }
             };
             // 执行状态命令（获取占用内存）
             StatsCmd statsCmd = dockerClient.statsCmd(containerId);
+            ExecuteInfo runInfo = new ExecuteInfo();
+            final long[] maxMemory = new long[1];
             ResultCallback<Statistics> statisticsResultCallback = new ResultCallback<Statistics>() {
                 @Override
                 public void onNext(Statistics statistics) {
-                    Long memory = statistics.getMemoryStats().getUsage();
+                    long memory = statistics.getMemoryStats().getUsage();
                     System.out.println("内存占用:" + memory);
                     maxMemory[0] = Math.max(maxMemory[0], memory);
                 }
@@ -197,37 +202,60 @@ public class JavaDockerCodeSandBox implements CodeSandBox {
 
                 }
             };
-            statsCmd.exec(statisticsResultCallback);
             // 执行执行命令
             String execId = execCreateCmdResponse.getId();
+            long time;
             try {
                 // 计时
                 StopWatch stopWatch = new StopWatch();
+                statsCmd.exec(statisticsResultCallback);
                 stopWatch.start();
                 dockerClient.execStartCmd(execId)
                         .exec(execStartResultCallback)
-                        .awaitCompletion(TIME_LIMIT, TimeUnit.MICROSECONDS);
+                        .awaitCompletion(TIME_LIMIT, TimeUnit.MILLISECONDS);
                 stopWatch.stop();
-                maxTime = Math.max(maxTime, stopWatch.getLastTaskTimeMillis());
                 statsCmd.close();
-                // 超时 或 超出内存 或 运行错误 则终止循环
-                if (maxTime > TIME_LIMIT || maxMemory[0] > MEMORY_LIMIT
-                        || ExecuteCodeStatusEnum.RUNTIME_ERROR.getValue().equals(executeCodeResponse.getStatus())) {
-                    break;
-                }
+                time = stopWatch.getLastTaskTimeMillis();
             } catch (InterruptedException e) {
                 // 系统错误 直接返回
                 executeCodeResponse.setStatus(ExecuteCodeStatusEnum.SYSTEM_ERROR.getValue());
                 return executeCodeResponse;
             }
-
+            // 封装执行信息
+            runInfo.setTime(time);
+            runInfo.setMessage(message[0]);
+            runInfo.setErrorMessage(errorMessage[0]);
+            runInfo.setMemory(maxMemory[0]);
+            System.out.println(runInfo);
+            runInfoList.add(runInfo);
+            // 超时 或 超出内存则终止循环
+            if (runInfo.getTime() > TIME_LIMIT || runInfo.getMemory() > MEMORY_LIMIT) {
+                break;
+            }
+            // 运行错误则终止循环
+            String runErrorMessage = runInfo.getErrorMessage();
+            if (StrUtil.isNotBlank(runErrorMessage)) {
+                executeCodeResponse.setMessage(runErrorMessage);
+                // 运行错误
+                executeCodeResponse.setStatus(ExecuteCodeStatusEnum.RUNTIME_ERROR.getValue());
+                break;
+            }
         }
 
         // 5.得到结果并整理
+        List<String> outputList = new ArrayList<>();
+        long maxTime = 0L;
+        long maxMemory = 0L;
+        for (ExecuteInfo runInfo : runInfoList) {
+            outputList.add(runInfo.getMessage());
+            maxTime = Math.max(maxTime, runInfo.getTime());
+            maxMemory = Math.max(maxMemory, runInfo.getMemory());
+        }
         executeCodeResponse.setOutputList(outputList);
+
         JudgeInfo judgeInfo = new JudgeInfo();
         judgeInfo.setTime(maxTime);
-        judgeInfo.setMemory(maxMemory[0]);
+        judgeInfo.setMemory(maxMemory);
         executeCodeResponse.setJudgeInfo(judgeInfo);
 
         // 6.清理文件

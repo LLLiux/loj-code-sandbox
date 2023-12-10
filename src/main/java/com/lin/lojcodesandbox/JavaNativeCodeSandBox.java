@@ -152,8 +152,7 @@ public class JavaNativeCodeSandBox implements CodeSandBox {
         long maxTime = 0L;
         for (ExecuteInfo runInfo : runInfoList) {
             outputList.add(runInfo.getMessage());
-            Long time = runInfo.getTime();
-            maxTime = Math.max(maxTime, time);
+            maxTime = Math.max(maxTime, runInfo.getTime());
         }
         executeCodeResponse.setOutputList(outputList);
 
