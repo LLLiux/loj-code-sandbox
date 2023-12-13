@@ -1,12 +1,14 @@
 package com.lin.lojcodesandbox;
 
-import cn.hutool.core.io.FileUtil;
 import cn.hutool.core.io.resource.ResourceUtil;
 import cn.hutool.core.util.ArrayUtil;
 import cn.hutool.core.util.StrUtil;
 import com.github.dockerjava.api.DockerClient;
 import com.github.dockerjava.api.async.ResultCallback;
-import com.github.dockerjava.api.command.*;
+import com.github.dockerjava.api.command.CreateContainerResponse;
+import com.github.dockerjava.api.command.ExecCreateCmdResponse;
+import com.github.dockerjava.api.command.PullImageResultCallback;
+import com.github.dockerjava.api.command.StatsCmd;
 import com.github.dockerjava.api.model.*;
 import com.github.dockerjava.core.DockerClientBuilder;
 import com.github.dockerjava.core.command.ExecStartResultCallback;
@@ -14,35 +16,22 @@ import com.lin.lojcodesandbox.enums.ExecuteCodeStatusEnum;
 import com.lin.lojcodesandbox.model.ExecuteCodeRequest;
 import com.lin.lojcodesandbox.model.ExecuteCodeResponse;
 import com.lin.lojcodesandbox.model.ExecuteInfo;
-import com.lin.lojcodesandbox.model.JudgeInfo;
-import com.lin.lojcodesandbox.utils.ProcessUtils;
 import org.springframework.util.StopWatch;
 
 import java.io.Closeable;
 import java.io.File;
-import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
-import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 
 /**
  * @author L
  */
-public class JavaDockerCodeSandBox implements CodeSandBox {
-
-    private static final String CODE_DIR_NAME = "tmpCode";
-
-    private static final String USER_CODE_NAME = "Main.java";
-
-    private static final Long TIME_LIMIT = 5000L;
-
-    private static final Long MEMORY_LIMIT = 100 * 1000 * 1000L;
+public class JavaDockerCodeSandBox extends JavaCodeSandBoxTemplate {
 
     private static Boolean FIRST_LOAD = true;
-
 
     public static void main(String[] args) {
         JavaDockerCodeSandBox javaNativeCodeSandBox = new JavaDockerCodeSandBox();
@@ -60,44 +49,8 @@ public class JavaDockerCodeSandBox implements CodeSandBox {
     }
 
     @Override
-    public ExecuteCodeResponse executeCode(ExecuteCodeRequest executeCodeRequest) {
-        ExecuteCodeResponse executeCodeResponse = new ExecuteCodeResponse();
-        executeCodeResponse.setStatus(ExecuteCodeStatusEnum.SUCCEED.getValue());
-        String code = executeCodeRequest.getCode();
-
-        // 1.将用户传入代码保存为 java 文件
-        // 检查代码存储目录是否存在
-        String userDir = System.getProperty("user.dir");
-        String codeDir = userDir + File.separator + CODE_DIR_NAME;
-        if (!FileUtil.exist(codeDir)) {
-            FileUtil.mkdir(codeDir);
-        }
-        // 对于每次代码提交 生成独立目录（存 .java 和 .class）
-        String userCodeDir = codeDir + File.separator + UUID.randomUUID();
-        String userCodePath = userCodeDir + File.separator + USER_CODE_NAME;
-        File userCodeFile = FileUtil.writeString(code, userCodePath, StandardCharsets.UTF_8);
-
-        // 2.编译
-        String compileCmd = String.format("javac -encoding utf-8 %s", userCodePath);
-        ExecuteInfo compileInfo;
-        try {
-            Process compileProcess = Runtime.getRuntime().exec(compileCmd);
-            compileInfo = ProcessUtils.runProcessAndGetInfo(compileProcess, "编译");
-        } catch (Exception e) {
-            // 系统错误 直接返回
-            executeCodeResponse.setStatus(ExecuteCodeStatusEnum.SYSTEM_ERROR.getValue());
-            return executeCodeResponse;
-        }
-        System.out.println(compileInfo);
-        String compileErrorMessage = compileInfo.getErrorMessage();
-        if (StrUtil.isNotBlank(compileErrorMessage)) {
-            executeCodeResponse.setMessage(compileErrorMessage);
-            // 编译错误 直接返回
-            executeCodeResponse.setStatus(ExecuteCodeStatusEnum.COMPILE_ERROR.getValue());
-            return executeCodeResponse;
-        }
-
-        // 3.将编译后的文件上传至容器内
+    List<ExecuteInfo> runCode(List<String> inputList, File codeFile, ExecuteCodeResponse executeCodeResponse) throws Exception {
+        // 1.将编译后的文件上传至容器内
         DockerClient dockerClient = DockerClientBuilder.getInstance().build();
         // 在已有镜像上扩充
         String openjdkImage = "openjdk:8-alpine";
@@ -119,6 +72,7 @@ public class JavaDockerCodeSandBox implements CodeSandBox {
             FIRST_LOAD = false;
         }
         // 创建容器
+        String userCodeDir = codeFile.getParentFile().getAbsolutePath();
         HostConfig hostConfig = new HostConfig()
                 .withBinds(new Bind(userCodeDir, new Volume("/app")))
                 .withMemory(MEMORY_LIMIT)
@@ -134,13 +88,12 @@ public class JavaDockerCodeSandBox implements CodeSandBox {
                 .exec();
         System.out.println(createContainerResponse);
 
-        // 4.容器内执行
+        // 2.容器内执行
         // 启动容器
         String containerId = createContainerResponse.getId();
         dockerClient.startContainerCmd(containerId).exec();
         // 执行
         List<ExecuteInfo> runInfoList = new ArrayList<>();
-        List<String> inputList = executeCodeRequest.getInputList();
         for (String input : inputList) {
             String[] inputArray = input.split(" ");
             // 创建执行命令（此时还未执行）
@@ -205,22 +158,16 @@ public class JavaDockerCodeSandBox implements CodeSandBox {
             // 执行执行命令
             String execId = execCreateCmdResponse.getId();
             long time;
-            try {
-                // 计时
-                StopWatch stopWatch = new StopWatch();
-                statsCmd.exec(statisticsResultCallback);
-                stopWatch.start();
-                dockerClient.execStartCmd(execId)
-                        .exec(execStartResultCallback)
-                        .awaitCompletion(TIME_LIMIT, TimeUnit.MILLISECONDS);
-                stopWatch.stop();
-                statsCmd.close();
-                time = stopWatch.getLastTaskTimeMillis();
-            } catch (InterruptedException e) {
-                // 系统错误 直接返回
-                executeCodeResponse.setStatus(ExecuteCodeStatusEnum.SYSTEM_ERROR.getValue());
-                return executeCodeResponse;
-            }
+            // 计时
+            StopWatch stopWatch = new StopWatch();
+            statsCmd.exec(statisticsResultCallback);
+            stopWatch.start();
+            dockerClient.execStartCmd(execId)
+                    .exec(execStartResultCallback)
+                    .awaitCompletion(TIME_LIMIT, TimeUnit.MILLISECONDS);
+            stopWatch.stop();
+            statsCmd.close();
+            time = stopWatch.getLastTaskTimeMillis();
             // 封装执行信息
             runInfo.setTime(time);
             runInfo.setMessage(message[0]);
@@ -241,28 +188,6 @@ public class JavaDockerCodeSandBox implements CodeSandBox {
                 break;
             }
         }
-
-        // 5.得到结果并整理
-        List<String> outputList = new ArrayList<>();
-        long maxTime = 0L;
-        long maxMemory = 0L;
-        for (ExecuteInfo runInfo : runInfoList) {
-            outputList.add(runInfo.getMessage());
-            maxTime = Math.max(maxTime, runInfo.getTime());
-            maxMemory = Math.max(maxMemory, runInfo.getMemory());
-        }
-        executeCodeResponse.setOutputList(outputList);
-
-        JudgeInfo judgeInfo = new JudgeInfo();
-        judgeInfo.setTime(maxTime);
-        judgeInfo.setMemory(maxMemory);
-        executeCodeResponse.setJudgeInfo(judgeInfo);
-
-        // 6.清理文件
-        if (FileUtil.exist(userCodeDir)) {
-            FileUtil.del(userCodeDir);
-        }
-
-        return executeCodeResponse;
+        return runInfoList;
     }
 }

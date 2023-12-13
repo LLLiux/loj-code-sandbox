@@ -5,6 +5,7 @@ import lombok.Data;
 import java.util.List;
 
 /**
+ * 代码执行结果
  * @author L
  */
 @Data
@@ -15,9 +16,14 @@ public class ExecuteCodeResponse {
     private String message;
 
     /**
-     * 判题信息
+     * 时间开销（ms）
      */
-    private JudgeInfo judgeInfo;
+    private Long time;
+
+    /**
+     * 内存开销（kB）
+     */
+    private Long memory;
 
     /**
      * 执行输出

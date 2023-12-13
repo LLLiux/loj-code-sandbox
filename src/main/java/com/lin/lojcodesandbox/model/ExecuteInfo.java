@@ -3,13 +3,13 @@ package com.lin.lojcodesandbox.model;
 import lombok.Data;
 
 /**
- * 执行信息
+ * 每次的执行信息
  * @author L
  */
 @Data
 public class ExecuteInfo {
     /**
-     * 消息
+     * 消息（一般是输出到控制台的结果）
      */
     private String message;
 
