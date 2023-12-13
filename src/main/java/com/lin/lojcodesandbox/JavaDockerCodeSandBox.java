@@ -11,24 +11,29 @@ import com.github.dockerjava.api.command.PullImageResultCallback;
 import com.github.dockerjava.api.command.StatsCmd;
 import com.github.dockerjava.api.model.*;
 import com.github.dockerjava.core.DockerClientBuilder;
+import com.github.dockerjava.core.InvocationBuilder;
 import com.github.dockerjava.core.command.ExecStartResultCallback;
 import com.lin.lojcodesandbox.enums.ExecuteCodeStatusEnum;
 import com.lin.lojcodesandbox.model.ExecuteCodeRequest;
 import com.lin.lojcodesandbox.model.ExecuteCodeResponse;
 import com.lin.lojcodesandbox.model.ExecuteInfo;
+import org.springframework.stereotype.Component;
 import org.springframework.util.StopWatch;
 
 import java.io.Closeable;
 import java.io.File;
+import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 
 /**
  * @author L
  */
+@Component
 public class JavaDockerCodeSandBox extends JavaCodeSandBoxTemplate {
 
     private static Boolean FIRST_LOAD = true;
@@ -109,50 +114,36 @@ public class JavaDockerCodeSandBox extends JavaCodeSandBoxTemplate {
             // 处理不同类型输出（错误输出表示执行出错 正常输出就是正常返回值）
             final String[] message = new String[1];
             final String[] errorMessage = new String[1];
+            final boolean[] getMessageFlag = {false};
             ExecStartResultCallback execStartResultCallback = new ExecStartResultCallback() {
                 @Override
                 public void onNext(Frame frame) {
-                    StreamType streamType = frame.getStreamType();
-                    if (StreamType.STDERR.equals(streamType)) {
-                        // 错误输出
-                        errorMessage[0] = new String(frame.getPayload());
-                    } else {
-                        // 正常输出
-                        message[0] = new String(frame.getPayload());
+                    if(!getMessageFlag[0]){
+                        StreamType streamType = frame.getStreamType();
+                        if (StreamType.STDERR.equals(streamType)) {
+                            // 错误输出
+                            errorMessage[0] = new String(frame.getPayload());
+                            System.out.println("输出错误结果:" + errorMessage[0]);
+                        } else {
+                            // 正常输出
+                            message[0] = new String(frame.getPayload());
+                            System.out.println("输出结果:" + message[0]);
+                        }
+                        getMessageFlag[0] = true;
                     }
                     super.onNext(frame);
                 }
+
             };
             // 执行状态命令（获取占用内存）
             StatsCmd statsCmd = dockerClient.statsCmd(containerId);
             ExecuteInfo runInfo = new ExecuteInfo();
-            final long[] maxMemory = new long[1];
-            ResultCallback<Statistics> statisticsResultCallback = new ResultCallback<Statistics>() {
+            final long[] memory = new long[1];
+            InvocationBuilder.AsyncResultCallback<Statistics> callback = new InvocationBuilder.AsyncResultCallback<Statistics>() {
                 @Override
                 public void onNext(Statistics statistics) {
-                    long memory = statistics.getMemoryStats().getUsage();
-                    System.out.println("内存占用:" + memory);
-                    maxMemory[0] = Math.max(maxMemory[0], memory);
-                }
-
-                @Override
-                public void close() {
-
-                }
-
-                @Override
-                public void onStart(Closeable closeable) {
-
-                }
-
-                @Override
-                public void onError(Throwable throwable) {
-
-                }
-
-                @Override
-                public void onComplete() {
-
+                    System.out.println("内存占用:" + statistics.getMemoryStats().getUsage());
+                    memory[0] = statistics.getMemoryStats().getUsage();
                 }
             };
             // 执行执行命令
@@ -160,19 +151,18 @@ public class JavaDockerCodeSandBox extends JavaCodeSandBoxTemplate {
             long time;
             // 计时
             StopWatch stopWatch = new StopWatch();
-            statsCmd.exec(statisticsResultCallback);
+            statsCmd.withNoStream(true).exec(callback).awaitResult();
             stopWatch.start();
             dockerClient.execStartCmd(execId)
                     .exec(execStartResultCallback)
                     .awaitCompletion(TIME_LIMIT, TimeUnit.MILLISECONDS);
             stopWatch.stop();
-            statsCmd.close();
-            time = stopWatch.getLastTaskTimeMillis();
             // 封装执行信息
+            time = stopWatch.getLastTaskTimeMillis();
             runInfo.setTime(time);
+            runInfo.setMemory(memory[0]);
             runInfo.setMessage(message[0]);
             runInfo.setErrorMessage(errorMessage[0]);
-            runInfo.setMemory(maxMemory[0]);
             System.out.println(runInfo);
             runInfoList.add(runInfo);
             // 超时 或 超出内存则终止循环

@@ -77,6 +77,7 @@ public abstract class JavaCodeSandBoxTemplate implements CodeSandBox {
             log.error("deleteFile error,file path : {}", codeFile.getAbsolutePath());
         }
 
+        System.out.println(executeCodeResponse);
         return executeCodeResponse;
     }
 
@@ -138,7 +139,7 @@ public abstract class JavaCodeSandBoxTemplate implements CodeSandBox {
         long maxTime = 0L;
         long maxMemory = 0L;
         for (ExecuteInfo runInfo : runInfoList) {
-            outputList.add(runInfo.getMessage());
+            outputList.add(runInfo.getMessage().replace("\n", ""));
             maxTime = Math.max(maxTime, runInfo.getTime());
             maxMemory = Math.max(maxMemory, runInfo.getMemory());
         }
